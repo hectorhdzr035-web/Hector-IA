@@ -117,7 +117,7 @@ function Login({onDone,oauthReturn}:{onDone:(user:User)=>void;oauthReturn:boolea
       <header><span>{register?'CONFIGURACIÓN INICIAL':oauthReturn?'AUTORIZACIÓN MCP':'ACCESO PRIVADO'}</span><h2>{register?'Crear propietario':'Bienvenido'}</h2><p>{register?'Configura la cuenta principal de esta instalación.':oauthReturn?'Inicia sesión para volver y autorizar Héctor OS Full.':'Continúa exactamente donde dejaste tu trabajo.'}</p></header>
       {register&&<label>Nombre<input name="name" defaultValue="Héctor" autoComplete="name" required/></label>}
       <label>Correo<input name="email" type="email" inputMode="email" autoComplete="email" required/></label>
-      <label>Contraseña<input name="password" type="password" minLength={10} autoComplete={register?'new-password':'current-password'} required/></label>
+      <label>Contraseña<input name="password" type="password" minLength={register?10:1} autoComplete={register?'new-password':'current-password'} required/></label>
       {error&&<div className="hcError" role="alert">{error}</div>}
       <button className="hcLoginSubmit" disabled={busy}>{busy?'PROCESANDO…':register?'CREAR CUENTA':'ENTRAR'}</button>
       <button className="hcLoginSwitch" type="button" onClick={()=>{setRegister(value=>!value);setError('')}}>{register?'Ya tengo cuenta':'Configurar por primera vez'}</button>

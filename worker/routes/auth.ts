@@ -8,7 +8,8 @@ import {requireAuth} from '../lib/auth';
 import {TEST_ACCOUNT_EMAIL,TEST_ACCOUNT_NAME,canProvisionTestAccount,classifyAccountRole,type AccountRole} from '../lib/test-account';
 
 export const auth=new Hono<{Bindings:Bindings;Variables:Variables}>();
-const credentials=z.object({email:z.string().email(),password:z.string().min(10).max(128),name:z.string().min(2).max(60).optional()});
+const loginCredentials=z.object({email:z.string().email(),password:z.string().min(1).max(128)});
+const registrationCredentials=loginCredentials.extend({password:z.string().min(10).max(128),name:z.string().min(2).max(60).optional()});
 const MAX_FAILURES=5,BLOCK_MS=15*60_000;
 const cookie=(c:any,token:string)=>setCookie(c,'hector_session',token,{httpOnly:true,secure:true,sameSite:'Strict',path:'/',maxAge:60*60*24*30});
 
@@ -61,7 +62,7 @@ async function recordAccountAudit(db:D1Database,userId:string,action:string,test
 }
 
 auth.post('/register',async(c:any)=>{
- const parsed=credentials.safeParse(await c.req.json());
+ const parsed=registrationCredentials.safeParse(await c.req.json());
  if(!parsed.success)return c.json({error:'Datos inválidos',details:parsed.error.flatten()},400);
  const id=crypto.randomUUID(),{hash,salt}=await hashPassword(parsed.data.password),token=randomToken(),tokenHash=await sha256(token),ipHash=await requestIpHash(c);
  try{
@@ -76,7 +77,7 @@ auth.post('/register',async(c:any)=>{
 });
 
 auth.post('/login',async(c:any)=>{
- const parsed=credentials.safeParse(await c.req.json());
+ const parsed=loginCredentials.safeParse(await c.req.json());
  if(!parsed.success)return c.json({error:'Credenciales inválidas'},400);
  const {key,decision}=await enforceRateLimit(c,parsed.data.email);
  if(decision.blocked){c.header('Retry-After',String(decision.retryAfterSeconds??900));return c.json({error:'Demasiados intentos. Intenta más tarde.'},429);}
