@@ -1,13 +1,12 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import {PatientShiftApp} from './PatientShiftApp';
-import './patient-shift.css';
-import './patient-shift-accessibility.css';
+import {HectorChatApp} from './HectorChatApp';
+import './hector-chat.css';
+import './hector-chat-mobile-refinement.css';
 
-// Active PWA surface: patient shift control.
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <PatientShiftApp/>
+    <HectorChatApp/>
   </React.StrictMode>
 );
 

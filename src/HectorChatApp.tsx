@@ -72,14 +72,20 @@ function modelName(message?:ChatMessage){
 
 export function HectorChatApp(){
   const [user,setUser]=useState<User|null|undefined>();
+  const returnTo=useMemo(()=>{
+    const value=new URLSearchParams(window.location.search).get('return_to');
+    if(!value)return null;
+    try{const target=new URL(value,window.location.origin);return target.origin===window.location.origin&&target.pathname==='/oauth/authorize'?target.toString():null}catch{return null}
+  },[]);
   useEffect(()=>{api.me().then(result=>setUser(result.user)).catch(()=>setUser(null))},[]);
 
   if(user===undefined)return <div className="hcBoot" aria-label="Iniciando Héctor"><div className="hcBrandOrb">H</div><div className="hcBootDots"><i/><i/><i/></div></div>;
-  if(!user)return <Login onDone={setUser}/>;
+  if(!user)return <Login onDone={next=>{setUser(next);if(returnTo)window.location.assign(returnTo)}} oauthReturn={Boolean(returnTo)}/>;
+  if(returnTo){window.location.replace(returnTo);return <div className="hcBoot" aria-label="Volviendo a la autorización"><div className="hcBrandOrb">H</div></div>}
   return <Workspace user={user} onLogout={()=>api.logout().finally(()=>setUser(null))}/>;
 }
 
-function Login({onDone}:{onDone:(user:User)=>void}){
+function Login({onDone,oauthReturn}:{onDone:(user:User)=>void;oauthReturn:boolean}){
   const [register,setRegister]=useState(false);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
@@ -108,7 +114,7 @@ function Login({onDone}:{onDone:(user:User)=>void}){
       <small><ShieldCheck/> Sesión privada y cifrada</small>
     </section>
     <form className="hcLoginCard" onSubmit={submit}>
-      <header><span>{register?'CONFIGURACIÓN INICIAL':'ACCESO PRIVADO'}</span><h2>{register?'Crear propietario':'Bienvenido'}</h2><p>{register?'Configura la cuenta principal de esta instalación.':'Continúa exactamente donde dejaste tu trabajo.'}</p></header>
+      <header><span>{register?'CONFIGURACIÓN INICIAL':oauthReturn?'AUTORIZACIÓN MCP':'ACCESO PRIVADO'}</span><h2>{register?'Crear propietario':'Bienvenido'}</h2><p>{register?'Configura la cuenta principal de esta instalación.':oauthReturn?'Inicia sesión para volver y autorizar Héctor OS Full.':'Continúa exactamente donde dejaste tu trabajo.'}</p></header>
       {register&&<label>Nombre<input name="name" defaultValue="Héctor" autoComplete="name" required/></label>}
       <label>Correo<input name="email" type="email" inputMode="email" autoComplete="email" required/></label>
       <label>Contraseña<input name="password" type="password" minLength={10} autoComplete={register?'new-password':'current-password'} required/></label>

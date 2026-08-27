@@ -1,5 +1,6 @@
 import {existsSync,readdirSync,readFileSync,statSync} from 'node:fs';
 import {join,relative} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {describe,expect,it} from 'vitest';
 
 const root=new URL('../',import.meta.url);
@@ -7,7 +8,7 @@ const read=(path:string)=>readFileSync(new URL(path,root),'utf8');
 const registry=JSON.parse(read('config/pwa-registry.json'));
 
 function manifests(dir:string):string[]{
- const absolute=new URL(dir,root).pathname;
+ const absolute=fileURLToPath(new URL(dir,root));
  const out:string[]=[];
  const walk=(path:string)=>{
   for(const name of readdirSync(path)){

@@ -7,11 +7,10 @@ const app=read('src/PatientShiftApp.tsx');
 const css=read('src/patient-shift.css');
 
 describe('control de pacientes por turno',()=>{
-  it('monta la experiencia operativa nueva como pantalla principal',()=>{
-    expect(main).toContain("import {PatientShiftApp} from './PatientShiftApp'");
-    expect(main).toContain('<PatientShiftApp/>');
-    expect(main).toContain("import './patient-shift.css'");
-    expect(main).not.toContain('<HectorChatApp/>');
+  it('mantiene Héctor OS como pantalla principal y el flujo clínico aislado',()=>{
+    expect(main).toContain("import {HectorChatApp} from './HectorChatApp'");
+    expect(main).toContain('<HectorChatApp/>');
+    expect(main).not.toContain('<PatientShiftApp/>');
     expect(main).not.toContain('<HectorQualityOverlay/>');
   });
 

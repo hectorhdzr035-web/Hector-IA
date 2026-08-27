@@ -10,7 +10,8 @@ import {
 export const mcpOAuth=new Hono<{Bindings:Bindings;Variables:Variables}>();
 
 const CODE_TTL_SECONDS=5*60;
-const TOKEN_TTL_SECONDS=30*24*60*60;
+const TOKEN_TTL_SECONDS=60*60;
+const REFRESH_TOKEN_TTL_SECONDS=180*24*60*60;
 
 function originOf(url:string){const u=new URL(url);return`${u.protocol}//${u.host}`;}
 function esc(value:unknown){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]||ch));}
@@ -59,8 +60,8 @@ mcpOAuth.get('/oauth/authorize',async c=>{
  try{request=trustedAuthorizationRequest(c.req.url);}catch(error){return c.html(htmlPage('Solicitud OAuth inválida',`<h1>No se puede autorizar</h1><p>${esc(error instanceof Error?error.message:'Solicitud OAuth inválida')}</p>`),400);}
  const session=await currentSession(c);
  if(!session){
-  const here=new URL(c.req.url);here.searchParams.set('continue','1');
-  return c.html(htmlPage('Inicia sesión en Héctor',`<h1>Autorizar ${esc(request.client.clientName)}</h1><p>El navegador aún no entregó una sesión de Héctor a esta solicitud.</p><p>Si ya tienes sesión abierta, toca <strong>Continuar autorización</strong>. Si no, abre Héctor OS, inicia sesión y vuelve a esta pestaña.</p><p><a class="button primary" href="${esc(here.toString())}">Continuar autorización</a><a class="button" target="_blank" rel="noopener" href="/">Abrir Héctor OS</a></p><p class="muted">La cookie de sesión permanece SameSite=Strict; no se debilita para OAuth.</p>`),401);
+  const login=new URL('/',request.origin);login.searchParams.set('return_to',c.req.url);
+  return c.redirect(login.toString(),302);
  }
  const full=request.profile.mode==='full';
  const warning=full?`<p class="warn"><strong>Acceso completo:</strong> este cliente podrá usar herramientas de Héctor que creen o modifiquen datos dentro de los scopes mostrados.</p>`:`<p><strong>Solo lectura:</strong> el recurso autorizado es <code>/mcp-read</code>; no expone herramientas de escritura.</p>`;
@@ -89,7 +90,22 @@ mcpOAuth.post('/oauth/authorize',async c=>{
 mcpOAuth.post('/oauth/token',async c=>{
  oauthHeaders(c);
  const type=(c.req.header('Content-Type')||'').toLowerCase();if(!type.includes('application/x-www-form-urlencoded'))return c.json({error:'invalid_request',error_description:'Content-Type debe ser application/x-www-form-urlencoded'},400);
- const form=await c.req.parseBody(),grantType=String(form.grant_type||''),rawCode=String(form.code||''),clientId=String(form.client_id||''),redirectUri=String(form.redirect_uri||''),resource=String(form.resource||''),verifier=String(form.code_verifier||'');
+ const form=await c.req.parseBody(),grantType=String(form.grant_type||''),rawCode=String(form.code||''),clientId=String(form.client_id||''),redirectUri=String(form.redirect_uri||''),resource=String(form.resource||''),verifier=String(form.code_verifier||''),rawRefreshToken=String(form.refresh_token||'');
+ if(grantType==='refresh_token'){
+  if(!rawRefreshToken||!clientId)return c.json({error:'invalid_request'},400);
+  try{
+   const client=decodeDynamicClientId(clientId),refreshHash=await sha256(rawRefreshToken),row=await c.env.DB.prepare(`SELECT id,user_id,client_id,resource,scope FROM mcp_oauth_refresh_tokens WHERE token_hash=? AND revoked_at IS NULL AND expires_at>CURRENT_TIMESTAMP LIMIT 1`).bind(refreshHash).first<{id:string;user_id:string;client_id:string;resource:string;scope:string}>();
+   if(!row||row.client_id!==clientId)throw new Error('Refresh token inválido o vencido');
+   const profile=resourceProfile(c.req.url,row.resource);if(!profile)throw new Error('Recurso inválido');
+   const scopes=normalizeScopes(row.scope,profile.scopes),rawToken=`htr_${randomToken(32)}`,tokenHash=await sha256(rawToken),nextRefresh=`hor_${randomToken(32)}`,nextRefreshHash=await sha256(nextRefresh),accessExpiresAt=new Date(Date.now()+TOKEN_TTL_SECONDS*1000).toISOString(),refreshExpiresAt=new Date(Date.now()+REFRESH_TOKEN_TTL_SECONDS*1000).toISOString();
+   await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE mcp_oauth_refresh_tokens SET revoked_at=CURRENT_TIMESTAMP WHERE id=? AND revoked_at IS NULL').bind(row.id),
+    c.env.DB.prepare('INSERT INTO external_access_tokens(id,user_id,name,token_hash,scopes_json,expires_at,resource_path) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),row.user_id,`OAuth ${client.clientName}`.slice(0,120),tokenHash,JSON.stringify(scopes),accessExpiresAt,profile.path),
+    c.env.DB.prepare('INSERT INTO mcp_oauth_refresh_tokens(id,token_hash,user_id,client_id,resource,scope,expires_at) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),nextRefreshHash,row.user_id,clientId,row.resource,scopes.join(' '),refreshExpiresAt)
+   ]);
+   return c.json({access_token:rawToken,token_type:'Bearer',expires_in:TOKEN_TTL_SECONDS,refresh_token:nextRefresh,scope:scopes.join(' '),resource:row.resource});
+  }catch(error){return c.json({error:'invalid_grant',error_description:error instanceof Error?error.message:'No se pudo renovar el token'},400);}
+ }
  if(grantType!=='authorization_code'||!rawCode||!clientId||!redirectUri||!resource||!verifier)return c.json({error:'invalid_request'},400);
  try{
   const client=decodeDynamicClientId(clientId);if(!client.redirectUris.some(uri=>redirectUriMatches(uri,redirectUri)))throw new Error('redirect_uri no registrado');
@@ -100,8 +116,11 @@ mcpOAuth.post('/oauth/token',async c=>{
   const actualChallenge=await pkceS256(verifier);if(actualChallenge!==row.code_challenge)throw new Error('PKCE inválido');
   const scopes=normalizeScopes(row.scope,profile.scopes),consume=await c.env.DB.prepare('UPDATE mcp_oauth_codes SET consumed_at=CURRENT_TIMESTAMP WHERE id=? AND consumed_at IS NULL').bind(row.id).run();
   if(Number(consume.meta.changes||0)!==1)throw new Error('Código ya utilizado');
-  const rawToken=`htr_${randomToken(32)}`,tokenHash=await sha256(rawToken),expiresAt=new Date(Date.now()+TOKEN_TTL_SECONDS*1000).toISOString();
-  await c.env.DB.prepare('INSERT INTO external_access_tokens(id,user_id,name,token_hash,scopes_json,expires_at,resource_path) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),row.user_id,`OAuth ${client.clientName}`.slice(0,120),tokenHash,JSON.stringify(scopes),expiresAt,profile.path).run();
-  return c.json({access_token:rawToken,token_type:'Bearer',expires_in:TOKEN_TTL_SECONDS,scope:scopes.join(' '),resource});
+  const rawToken=`htr_${randomToken(32)}`,tokenHash=await sha256(rawToken),rawRefreshToken=`hor_${randomToken(32)}`,refreshHash=await sha256(rawRefreshToken),expiresAt=new Date(Date.now()+TOKEN_TTL_SECONDS*1000).toISOString(),refreshExpiresAt=new Date(Date.now()+REFRESH_TOKEN_TTL_SECONDS*1000).toISOString();
+  await c.env.DB.batch([
+   c.env.DB.prepare('INSERT INTO external_access_tokens(id,user_id,name,token_hash,scopes_json,expires_at,resource_path) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),row.user_id,`OAuth ${client.clientName}`.slice(0,120),tokenHash,JSON.stringify(scopes),expiresAt,profile.path),
+   c.env.DB.prepare('INSERT INTO mcp_oauth_refresh_tokens(id,token_hash,user_id,client_id,resource,scope,expires_at) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),refreshHash,row.user_id,clientId,resource,scopes.join(' '),refreshExpiresAt)
+  ]);
+  return c.json({access_token:rawToken,token_type:'Bearer',expires_in:TOKEN_TTL_SECONDS,refresh_token:rawRefreshToken,scope:scopes.join(' '),resource});
  }catch(error){return c.json({error:'invalid_grant',error_description:error instanceof Error?error.message:'No se pudo canjear el código'},400);}
 });

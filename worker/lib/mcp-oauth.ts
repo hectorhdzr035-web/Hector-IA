@@ -98,7 +98,7 @@ export function authorizationServerMetadata(originOrUrl:string){
   token_endpoint:`${origin}/oauth/token`,
   registration_endpoint:`${origin}/oauth/register`,
   token_endpoint_auth_methods_supported:['none'],
-  grant_types_supported:['authorization_code'],
+  grant_types_supported:['authorization_code','refresh_token'],
   response_types_supported:['code'],
   code_challenge_methods_supported:['S256'],
   scopes_supported:[...MCP_FULL_SCOPES]

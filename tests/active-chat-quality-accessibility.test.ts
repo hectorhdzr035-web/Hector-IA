@@ -7,10 +7,10 @@ const app=read('src/PatientShiftApp.tsx');
 const a11y=read('src/patient-shift-accessibility.css');
 
 describe('patient shift accessibility',()=>{
-  it('mounts only the active patient shift surface',()=>{
-    expect(main).toContain("import {PatientShiftApp} from './PatientShiftApp'");
-    expect(main).toContain('<PatientShiftApp/>');
-    expect(main).toContain("import './patient-shift-accessibility.css'");
+  it('keeps the private Héctor OS shell at the canonical root',()=>{
+    expect(main).toContain("import {HectorChatApp} from './HectorChatApp'");
+    expect(main).toContain('<HectorChatApp/>');
+    expect(main).not.toContain('<PatientShiftApp/>');
     expect(main).not.toContain('HectorQualityOverlay');
   });
 
