@@ -38,6 +38,15 @@ function redirectWithOAuthResult(request:{origin:string;redirectUri:string;state
  const target=new URL(request.redirectUri);for(const [key,value] of Object.entries(params))target.searchParams.set(key,value);
  if(request.state)target.searchParams.set('state',request.state);target.searchParams.set('iss',request.origin);return target.toString();
 }
+async function issueAuthorization(c:any,session:{id:string},request:ReturnType<typeof trustedAuthorizationRequest>){
+ const rawCode=`hoc_${randomToken(32)}`,codeHash=await sha256(rawCode),id=crypto.randomUUID(),expiresAt=new Date(Date.now()+CODE_TTL_SECONDS*1000).toISOString();
+ await c.env.DB.batch([
+  c.env.DB.prepare("DELETE FROM mcp_oauth_codes WHERE expires_at<=CURRENT_TIMESTAMP OR consumed_at IS NOT NULL"),
+  c.env.DB.prepare('INSERT INTO mcp_oauth_codes(id,code_hash,user_id,client_id,redirect_uri,resource,scope,code_challenge,expires_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,codeHash,session.id,request.clientId,request.redirectUri,request.resource,request.scope,request.challenge,expiresAt)
+ ]);
+ const destination=redirectWithOAuthResult(request,{code:rawCode});
+ return c.html(htmlPage('Autorización concedida',`<h1>Autorización concedida</h1><p>Héctor preparó un código de un solo uso protegido por PKCE.</p><p><a class="button primary" href="${esc(destination)}">Continuar a ${esc(new URL(request.redirectUri).host)}</a></p><p class="muted">El código vence en cinco minutos y solo puede utilizarse una vez.</p>`));
+}
 
 mcpOAuth.get('/.well-known/oauth-authorization-server',c=>{oauthHeaders(c);return c.json(authorizationServerMetadata(c.req.url));});
 mcpOAuth.get('/.well-known/oauth-protected-resource',c=>{oauthHeaders(c);return c.json(protectedResourceMetadata(c.req.url,'/mcp-read'));});
@@ -65,8 +74,16 @@ mcpOAuth.get('/oauth/authorize',async c=>{
  }
  const full=request.profile.mode==='full';
  const warning=full?`<p class="warn"><strong>Acceso completo:</strong> este cliente podrá usar herramientas de Héctor que creen o modifiquen datos dentro de los scopes mostrados.</p>`:`<p><strong>Solo lectura:</strong> el recurso autorizado es <code>/mcp-read</code>; no expone herramientas de escritura.</p>`;
- const fields=[['client_id',request.clientId],['redirect_uri',request.redirectUri],['response_type','code'],['resource',request.resource],['scope',request.scope],['code_challenge',request.challenge],['code_challenge_method','S256'],['state',request.state]].map(([k,v])=>hidden(k,v)).join('');
- return c.html(htmlPage('Autorizar acceso a Héctor',`<h1>Autorizar ${esc(request.client.clientName)}</h1><p>Sesión: <strong>${esc(session.name)}</strong></p>${warning}<p>Recurso: <code>${esc(request.resource)}</code></p><p>Permisos: <code>${esc(request.scope)}</code></p><p>Al continuar, Héctor entregará un código de un solo uso protegido por PKCE.</p><form method="post" action="/oauth/authorize">${fields}<button class="primary" name="decision" value="allow" type="submit">Autorizar</button><button name="decision" value="deny" type="submit">Cancelar</button></form><p class="muted">Destino: ${esc(new URL(request.redirectUri).host)}</p>`));
+ const approve=new URL('/oauth/approve',request.origin);for(const [key,value] of [['client_id',request.clientId],['redirect_uri',request.redirectUri],['response_type','code'],['resource',request.resource],['scope',request.scope],['code_challenge',request.challenge],['code_challenge_method','S256'],['state',request.state]])approve.searchParams.set(key,value);
+ return c.html(htmlPage('Autorizar acceso a Héctor',`<h1>Autorizar ${esc(request.client.clientName)}</h1><p>Sesión: <strong>${esc(session.name)}</strong></p>${warning}<p>Recurso: <code>${esc(request.resource)}</code></p><p>Permisos: <code>${esc(request.scope)}</code></p><p>Al continuar, Héctor entregará un código de un solo uso protegido por PKCE.</p><p><a class="button primary" href="${esc(approve.toString())}">Autorizar</a><a class="button" href="/oauth/help">Cancelar</a></p><p class="muted">Destino: ${esc(new URL(request.redirectUri).host)}</p>`));
+});
+
+mcpOAuth.get('/oauth/approve',async c=>{
+ oauthHeaders(c);
+ const session=await currentSession(c);if(!session)return c.json({error:'login_required'},401);
+ let request:ReturnType<typeof trustedAuthorizationRequest>;
+ try{request=trustedAuthorizationRequest(c.req.url.replace('/oauth/approve','/oauth/authorize'));}catch(error){return c.json({error:'invalid_request',error_description:error instanceof Error?error.message:'Solicitud inválida'},400);}
+ return issueAuthorization(c,session,request);
 });
 
 mcpOAuth.post('/oauth/authorize',async c=>{
@@ -79,12 +96,7 @@ mcpOAuth.post('/oauth/authorize',async c=>{
  let request:ReturnType<typeof trustedAuthorizationRequest>;
  try{request=trustedAuthorizationRequest(query.toString());}catch(error){return c.json({error:'invalid_request',error_description:error instanceof Error?error.message:'Solicitud inválida'},400);}
  if(String(form.decision||'')!=='allow')return c.redirect(redirectWithOAuthResult(request,{error:'access_denied'}),302);
- const rawCode=`hoc_${randomToken(32)}`,codeHash=await sha256(rawCode),id=crypto.randomUUID(),expiresAt=new Date(Date.now()+CODE_TTL_SECONDS*1000).toISOString();
- await c.env.DB.batch([
-  c.env.DB.prepare("DELETE FROM mcp_oauth_codes WHERE expires_at<=CURRENT_TIMESTAMP OR consumed_at IS NOT NULL"),
-  c.env.DB.prepare('INSERT INTO mcp_oauth_codes(id,code_hash,user_id,client_id,redirect_uri,resource,scope,code_challenge,expires_at) VALUES(?,?,?,?,?,?,?,?,?)').bind(id,codeHash,session.id,request.clientId,request.redirectUri,request.resource,request.scope,request.challenge,expiresAt)
- ]);
- return c.redirect(redirectWithOAuthResult(request,{code:rawCode}),302);
+ return issueAuthorization(c,session,request);
 });
 
 mcpOAuth.post('/oauth/token',async c=>{
